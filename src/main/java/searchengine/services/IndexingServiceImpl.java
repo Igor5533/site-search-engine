@@ -9,6 +9,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import searchengine.config.SitesList;
@@ -47,110 +48,121 @@ public class IndexingServiceImpl implements IndexingService {
     @Override
     @Transactional
     public GenericResponse startIndexing() {
-        if (indexingInProgress.get()) {
-            return new GenericResponse(false, "Индексация уже запущена");
-        }
-        indexingInProgress.set(true);
-
-        for (searchengine.config.Site configSite : sitesList.getSites()) {
-            searchengine.model.Site existingSite = siteRepository.findByUrl(configSite.getUrl());
-            if (existingSite != null) {
-                siteRepository.delete(existingSite);
+        try {
+            if (indexingInProgress.get()) {
+                return new GenericResponse(false, "Индексация уже запущена");
             }
-            searchengine.model.Site siteEntity = new searchengine.model.Site();
-            siteEntity.setName(configSite.getName());
-            siteEntity.setUrl(configSite.getUrl());
-            siteEntity.setStatus(SiteStatus.INDEXING);
-            siteEntity.setStatusTime(LocalDateTime.now());
-            siteEntity.setLastError(null);
-            siteEntity = siteRepository.save(siteEntity);
+            indexingInProgress.set(true);
 
-            ForkJoinPool pool = new ForkJoinPool();
-            activePools.add(pool);
-            pool.submit(new PageCrawlerTask(siteEntity, configSite.getUrl()));
-        }
-
-        CompletableFuture.runAsync(() -> {
-            for (ForkJoinPool pool : activePools) {
-                pool.shutdown();
-                try {
-                    pool.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
-                } catch (InterruptedException e) {
-                    log.error("Ожидание завершения пула прервано", e);
+            for (searchengine.config.Site configSite : sitesList.getSites()) {
+                searchengine.model.Site existingSite = siteRepository.findByUrl(configSite.getUrl());
+                if (existingSite != null) {
+                    siteRepository.delete(existingSite);
                 }
-            }
-            activePools.clear();
-            indexingInProgress.set(false);
-        });
+                searchengine.model.Site siteEntity = new searchengine.model.Site();
+                siteEntity.setName(configSite.getName());
+                siteEntity.setUrl(configSite.getUrl());
+                siteEntity.setStatus(SiteStatus.INDEXING);
+                siteEntity.setStatusTime(LocalDateTime.now());
+                siteEntity.setLastError(null);
+                siteEntity = siteRepository.save(siteEntity);
 
-        return new GenericResponse(true);
+                ForkJoinPool pool = new ForkJoinPool();
+                activePools.add(pool);
+                pool.submit(new PageCrawlerTask(siteEntity, configSite.getUrl()));
+            }
+
+            CompletableFuture.runAsync(() -> {
+                for (ForkJoinPool pool : activePools) {
+                    pool.shutdown();
+                    try {
+                        pool.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+                    } catch (InterruptedException e) {
+                        log.error("Ожидание завершения пула прервано", e);
+                    }
+                }
+                activePools.clear();
+                indexingInProgress.set(false);
+            });
+
+            return new GenericResponse(true);
+        }catch (DataAccessException ex) {
+            log.error("Ошибка при работе с БД во время индексации: {}", ex.getMessage(), ex);
+            return new GenericResponse(false, "Ошибка базы данных");
+        }
     }
 
     @Override
     @Transactional
     public GenericResponse stopIndexing() {
-        if (!indexingInProgress.get()) {
-            return new GenericResponse(false, "Индексация не запущена");
-        }
-        for (ForkJoinPool pool : activePools) {
-            pool.shutdownNow();
-        }
-        activePools.clear();
-        indexingInProgress.set(false);
+        try {
+            if (!indexingInProgress.get()) {
+                return new GenericResponse(false, "Индексация не запущена");
+            }
+            for (ForkJoinPool pool : activePools) {
+                pool.shutdownNow();
+            }
+            activePools.clear();
+            indexingInProgress.set(false);
 
-        List<searchengine.model.Site> indexingSites = siteRepository.findByStatus(SiteStatus.INDEXING);
-        for (searchengine.model.Site site : indexingSites) {
-            site.setStatus(SiteStatus.FAILED);
-            site.setLastError("Индексация остановлена пользователем");
-            siteRepository.save(site);
+            List<searchengine.model.Site> indexingSites = siteRepository.findByStatus(SiteStatus.INDEXING);
+            for (searchengine.model.Site site : indexingSites) {
+                site.setStatus(SiteStatus.FAILED);
+                site.setLastError("Индексация остановлена пользователем");
+                siteRepository.save(site);
+            }
+            return new GenericResponse(true);
+        }catch (DataAccessException e){
+            log.error("Ошибка при работе с БД в stopIndexing()", e);
+            return new GenericResponse(false, "Ошибка при работе с базой данных: " + e.getMessage());
         }
-        return new GenericResponse(true);
     }
 
     @Override
     @Transactional
     public GenericResponse indexPage(String url) {
-        searchengine.config.Site matchingConfig = null;
-        for (searchengine.config.Site configSite : sitesList.getSites()) {
-            if (url.startsWith(configSite.getUrl())) {
-                matchingConfig = configSite;
-                break;
-            }
-        }
-        if (matchingConfig == null) {
-            return new GenericResponse(false, "Данная страница находится за пределами сайтов, указанных в конфигурационном файле");
-        }
-
-        searchengine.model.Site siteEntity = siteRepository.findByUrl(matchingConfig.getUrl());
-        if (siteEntity == null) {
-            siteEntity = new searchengine.model.Site();
-            siteEntity.setName(matchingConfig.getName());
-            siteEntity.setUrl(matchingConfig.getUrl());
-            siteEntity.setStatus(SiteStatus.INDEXING);
-            siteEntity.setStatusTime(LocalDateTime.now());
-            siteEntity.setLastError(null);
-            siteEntity = siteRepository.save(siteEntity);
-        }
-
-        String pagePath = getPath(url, siteEntity.getUrl());
-
-        pageRepository.findBySiteAndPath(siteEntity, pagePath).ifPresent(existingPage -> {
-            List<IndexEntity> indexEntities = indexRepository.findByPage(existingPage);
-            for (IndexEntity idx : indexEntities) {
-                Lemma lemma = idx.getLemma();
-                int newFreq = lemma.getFrequency() - 1;
-                if (newFreq <= 0) {
-                    lemmaRepository.delete(lemma);
-                } else {
-                    lemma.setFrequency(newFreq);
-                    lemmaRepository.save(lemma);
+        try {
+            searchengine.config.Site matchingConfig = null;
+            for (searchengine.config.Site configSite : sitesList.getSites()) {
+                if (url.startsWith(configSite.getUrl())) {
+                    matchingConfig = configSite;
+                    break;
                 }
             }
-            indexRepository.deleteAll(indexEntities);
-            pageRepository.delete(existingPage);
-        });
+            if (matchingConfig == null) {
+                return new GenericResponse(false, "Данная страница находится за пределами сайтов, указанных в конфигурационном файле");
+            }
 
-        try {
+            searchengine.model.Site siteEntity = siteRepository.findByUrl(matchingConfig.getUrl());
+            if (siteEntity == null) {
+                siteEntity = new searchengine.model.Site();
+                siteEntity.setName(matchingConfig.getName());
+                siteEntity.setUrl(matchingConfig.getUrl());
+                siteEntity.setStatus(SiteStatus.INDEXING);
+                siteEntity.setStatusTime(LocalDateTime.now());
+                siteEntity.setLastError(null);
+                siteEntity = siteRepository.save(siteEntity);
+            }
+
+            String pagePath = getPath(url, siteEntity.getUrl());
+
+            pageRepository.findBySiteAndPath(siteEntity, pagePath).ifPresent(existingPage -> {
+                List<IndexEntity> indexEntities = indexRepository.findByPage(existingPage);
+                for (IndexEntity idx : indexEntities) {
+                    Lemma lemma = idx.getLemma();
+                    int newFreq = lemma.getFrequency() - 1;
+                    if (newFreq <= 0) {
+                        lemmaRepository.delete(lemma);
+                    } else {
+                        lemma.setFrequency(newFreq);
+                        lemmaRepository.save(lemma);
+                    }
+                }
+                indexRepository.deleteAll(indexEntities);
+                pageRepository.delete(existingPage);
+            });
+
+
             Connection connection = Jsoup.connect(url)
                     .userAgent(userAgent)
                     .referrer(referrer)
@@ -170,12 +182,15 @@ public class IndexingServiceImpl implements IndexingService {
             page = pageRepository.save(page);
 
             processPageIndexing(siteEntity, page, doc.text());
-
+            return new GenericResponse(true);
+        } catch (DataAccessException e) {
+            log.error("Ошибка при работе с БД в indexPage()", e);
+            return new GenericResponse(false, "Ошибка при работе с базой данных: " + e.getMessage());
         } catch (Exception e) {
+            // Ловим любые другие ошибки (например, Jsoup и т.д.)
+            log.error("Общая ошибка в indexPage()", e);
             return new GenericResponse(false, "Ошибка при индексации страницы: " + e.getMessage());
         }
-
-        return new GenericResponse(true);
     }
 
     /**

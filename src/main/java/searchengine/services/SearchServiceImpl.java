@@ -185,7 +185,7 @@ public class SearchServiceImpl implements SearchService {
     /**
      * Возвращает суммарный frequency леммы по всем сайтам (для сортировки).
      */
-    private int getLemmaFrequencySum(String lemma, List<Site> sites) {
+    int getLemmaFrequencySum(String lemma, List<Site> sites) {
         int sum = 0;
         for (Site site : sites) {
             Optional<Lemma> optional = lemmaRepository.findBySiteAndLemma(site, lemma);
@@ -199,7 +199,7 @@ public class SearchServiceImpl implements SearchService {
     /**
      * Находит все страницы, на которых встречается лемма, по всем сайтам из списка.
      */
-    private Set<Page> findPagesByLemma(String lemma, List<Site> sites) {
+    Set<Page> findPagesByLemma(String lemma, List<Site> sites) {
         Set<Page> result = new HashSet<>();
         for (Site site : sites) {
             Optional<Lemma> optionalLemma = lemmaRepository.findBySiteAndLemma(site, lemma);
@@ -221,7 +221,7 @@ public class SearchServiceImpl implements SearchService {
      * Простой метод для извлечения заголовка из HTML-кода.
      * Можно улучшить, используя Jsoup.
      */
-    private String extractTitle(String html) {
+    String extractTitle(String html) {
         String lower = html.toLowerCase();
         int start = lower.indexOf("<title>");
         int end = lower.indexOf("</title>");
@@ -236,7 +236,7 @@ public class SearchServiceImpl implements SearchService {
      * Ищем первые вхождения слов из query в тексте и обрезаем вокруг.
      * В реальном проекте лучше использовать Jsoup + регулярки + более сложную логику.
      */
-    private String makeSnippet(String html, Set<String> queryLemmas) {
+    String makeSnippet(String html, Set<String> queryLemmas) {
         String text = html.replaceAll("<[^>]+>", " ");
         text = text.trim().replaceAll("\\s+", " ");
         if (text.length() > 1000) {
