@@ -1,6 +1,7 @@
 package searchengine.controllers;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import searchengine.dto.search.SearchResponse;
@@ -19,7 +20,6 @@ public class ApiController {
     private final IndexingService indexingService;
     private final SearchService searchService;
 
-
     @GetMapping("/statistics")
     public ResponseEntity<StatisticsResponse> statistics() {
         return ResponseEntity.ok(statisticsService.getStatistics());
@@ -27,17 +27,61 @@ public class ApiController {
 
     @GetMapping("/startIndexing")
     public ResponseEntity<GenericResponse> startIndexing() {
-        return ResponseEntity.ok(indexingService.startIndexing());
+        GenericResponse response = indexingService.startIndexing();
+        if (!response.isResult()) {
+            HttpStatus status = HttpStatus.BAD_REQUEST;
+            String error = response.getError();
+            if (error != null) {
+                if (error.startsWith("Индексация уже запущена") || error.startsWith("Индексация не запущена")
+                        || error.startsWith("Данная страница находится за пределами")) {
+                    status = HttpStatus.BAD_REQUEST;
+                }
+                if (error.startsWith("Ошибка базы данных") || error.startsWith("Ошибка при работе с базой данных")) {
+                    status = HttpStatus.INTERNAL_SERVER_ERROR;
+                }
+            }
+            return ResponseEntity.status(status).body(response);
+        }
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/stopIndexing")
     public ResponseEntity<GenericResponse> stopIndexing() {
-        return ResponseEntity.ok(indexingService.stopIndexing());
+        GenericResponse response = indexingService.stopIndexing();
+        if (!response.isResult()) {
+            HttpStatus status = HttpStatus.BAD_REQUEST;
+            String error = response.getError();
+            if (error != null) {
+                if (error.startsWith("Индексация не запущена")) {
+                    status = HttpStatus.BAD_REQUEST;
+                }
+                if (error.startsWith("Ошибка базы данных") || error.startsWith("Ошибка при работе с базой данных")) {
+                    status = HttpStatus.INTERNAL_SERVER_ERROR;
+                }
+            }
+            return ResponseEntity.status(status).body(response);
+        }
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/indexPage")
     public ResponseEntity<GenericResponse> indexPage(@RequestParam("url") String url) {
-        return ResponseEntity.ok(indexingService.indexPage(url));
+        GenericResponse response = indexingService.indexPage(url);
+        if (!response.isResult()) {
+            HttpStatus status = HttpStatus.BAD_REQUEST;
+            String error = response.getError();
+            if (error != null) {
+                if (error.startsWith("Данная страница находится за пределами")) {
+                    status = HttpStatus.BAD_REQUEST;
+                }
+                if (error.startsWith("Ошибка базы данных") || error.startsWith("Ошибка при работе с базой данных")
+                        || error.startsWith("Ошибка при индексации страницы")) {
+                    status = HttpStatus.INTERNAL_SERVER_ERROR;
+                }
+            }
+            return ResponseEntity.status(status).body(response);
+        }
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/search")
@@ -54,7 +98,18 @@ public class ApiController {
         }
         SearchResponse response = searchService.search(query, site, offset, limit);
         if (!response.isResult()) {
-            return ResponseEntity.badRequest().body(response);
+            HttpStatus status = HttpStatus.BAD_REQUEST;
+            String error = response.getError();
+            if (error != null) {
+                if (error.startsWith("Сайт не найден") || error.startsWith("Нет доступных проиндексированных сайтов")
+                        || error.startsWith("Не удалось выделить леммы")) {
+                    status = HttpStatus.BAD_REQUEST;
+                }
+                if (error.startsWith("Ошибка лемматизации") || error.startsWith("Ошибка при работе с базой данных")) {
+                    status = HttpStatus.INTERNAL_SERVER_ERROR;
+                }
+            }
+            return ResponseEntity.status(status).body(response);
         }
         return ResponseEntity.ok(response);
     }

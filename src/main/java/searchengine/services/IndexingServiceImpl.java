@@ -82,11 +82,17 @@ public class IndexingServiceImpl implements IndexingService {
                     }
                 }
                 activePools.clear();
+                List<searchengine.model.Site> indexedSites = siteRepository.findByStatus(SiteStatus.INDEXING);
+                for (searchengine.model.Site site : indexedSites) {
+                    site.setStatus(SiteStatus.INDEXED);
+                    site.setStatusTime(LocalDateTime.now());
+                    siteRepository.save(site);
+                }
                 indexingInProgress.set(false);
             });
 
             return new GenericResponse(true);
-        }catch (DataAccessException ex) {
+        } catch (DataAccessException ex) {
             log.error("Ошибка при работе с БД во время индексации: {}", ex.getMessage(), ex);
             return new GenericResponse(false, "Ошибка базы данных");
         }
